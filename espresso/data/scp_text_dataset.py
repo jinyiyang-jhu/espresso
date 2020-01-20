@@ -6,7 +6,12 @@
 import os
 
 import numpy as np
+
 import torch
+
+from fairseq.data import data_utils
+
+from espresso.tools.specaug_interpolate import specaug
 
 try:
     import kaldi_io
@@ -22,10 +27,13 @@ class ScpDataset(torch.utils.data.Dataset):
     every time each entry is inquired, thus incurs the most intensive I/O.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, seed=1, specaugment_config=None):
         super().__init__()
         self.dtype = np.float
         self.read_scp(path)
+        self.seed = seed
+        self.specaugment_config = specaugment_config
+        self.epoch = 0
 
     def read_scp(self, path):
         with open(path, 'r', encoding='utf-8') as f:
@@ -63,9 +71,15 @@ class ScpDataset(torch.utils.data.Dataset):
         self.size = len(self.utt_ids)
         self.ordered_indices = list(range(self.size))
 
+    def set_epoch(self, epoch):
+        self.epoch = epoch
+
     def __getitem__(self, i):
         self.check_index(i)
         feat = kaldi_io.read_mat(self.extended_filenames[i])
+        if self.specaugment_config is not None and self.specaugment_config != "":
+            with data_utils.numpy_seed(self.seed, self.epoch, i):
+                feat = specaug(feat, **eval(self.specaugment_config))
         item = torch.from_numpy(feat).float()
         return item
 
@@ -84,8 +98,10 @@ class ScpCachedDataset(ScpDataset):
     It balances the I/O efficiency and memory usage.
     """
 
-    def __init__(self, path, ordered_prefetch=False, cache_size=4096):
-        super().__init__(path)
+    def __init__(
+        self, path, seed=1, specaugment_config=None, ordered_prefetch=False, cache_size=4096
+    ):
+        super().__init__(path, seed=seed, specaugment_config=specaugment_config)
         self.cache = None
         self.cache_index = {}
         self.cache_size = cache_size  # in terms of number of examples
@@ -142,7 +158,11 @@ class ScpCachedDataset(ScpDataset):
                 self.cache_index[idx] = ptx
                 length = self.sizes[idx]
                 dst = self.cache[ptx: ptx + length]
-                np.copyto(dst, kaldi_io.read_mat(self.extended_filenames[idx]))
+                feat = kaldi_io.read_mat(self.extended_filenames[idx])
+                if self.specaugment_config is not None and self.specaugment_config != "":
+                    with data_utils.numpy_seed(self.seed, self.epoch, idx):
+                        feat = specaug(feat, **eval(self.specaugment_config))
+                np.copyto(dst, feat)
                 ptx += length
 
         ptx = self.cache_index[i]
@@ -156,8 +176,8 @@ class ScpInMemoryDataset(ScpDataset):
     It has the maximum memory usage and least I/O.
     """
 
-    def __init__(self, path):
-        super().__init__(path)
+    def __init__(self, path, seed=1, specaugment_config=None):
+        super().__init__(path, seed=seed, specaugment_config=specaugment_config)
         self.read_data()
 
     def read_data(self):
@@ -179,6 +199,9 @@ class ScpInMemoryDataset(ScpDataset):
         self.check_index(i)
         ptx = self.data_offsets[i]
         a = self.buffer[ptx: ptx + self.sizes[i]].copy()
+        if self.specaugment_config is not None and self.specaugment_config != "":
+            with data_utils.numpy_seed(self.seed, self.epoch, i):
+                a = specaug(a, **eval(self.specaugment_config))
         return torch.from_numpy(a).float()
 
 

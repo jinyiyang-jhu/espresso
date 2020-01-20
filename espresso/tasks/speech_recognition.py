@@ -95,6 +95,12 @@ class SpeechRecognitionEspressoTask(FairseqTask):
                             help='amount to upsample primary dataset')
         parser.add_argument('--feat-in-channels', default=1, type=int, metavar='N',
                             help='feature input channels')
+        parser.add_argument('--specaugment-config', default=None, type=str, metavar='EXPR',
+                            help='SpecAugment config string. If not None and not empty, '
+                            'then apply SpecAugment. Should be an evaluatable expression of '
+                            'a python dict. See speech_tools.specaug_interpolate.specaug() for '
+                            'all allowed arguments. Argments not appearing in this string '
+                            'will take on their default values')
         # fmt: off
 
     @classmethod
@@ -117,6 +123,7 @@ class SpeechRecognitionEspressoTask(FairseqTask):
         self.dictionary = dictionary
         self.word_dict = word_dict
         self.feat_in_channels = args.feat_in_channels
+        self.specaugment_config = args.specaugment_config
         torch.backends.cudnn.deterministic = True
         # Compansate for the removel of :func:`torch.rand()` from
         # :func:`fairseq.distributed_utils.distributed_init()` by fairseq,
@@ -181,7 +188,11 @@ class SpeechRecognitionEspressoTask(FairseqTask):
         for feat, text in file_pairs:
             assert ScpCachedDataset.exists(feat), feat + ' does not exists'
             assert text is None or AsrTextDataset.exists(text), text + ' does not exists'
-            src_datasets.append(ScpCachedDataset(feat, ordered_prefetch=True))
+            src_datasets.append(ScpCachedDataset(
+                feat, seed=self.args.seed,
+                specaugment_config=self.specaugment_config if split == 'train' else None,
+                ordered_prefetch=True,
+            ))
             logger.info('{} {} examples'.format(feat, len(src_datasets[-1])))
             if text is not None:
                 tgt_datasets.append(AsrTextDataset(text, self.dictionary))
